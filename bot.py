@@ -6,6 +6,9 @@ import json
 import asyncio
 import re
 
+# Максимальная длина сообщения в Telegram (4096 символов)
+TELEGRAM_MESSAGE_LIMIT = 4096
+
 # Загружаем переменные окружения из файла .env
 load_dotenv()
 
@@ -24,6 +27,7 @@ if not BIBLE_JSON_PATH:
 if not BOOK_ALIASES_PATH:
     raise ValueError("BOOK_ALIASES_PATH не найден. Убедитесь, что он установлен в .env файле или как переменная окружения.")
 
+
 # Глобальные переменные для хранения данных Библии и алиасов
 bible_data_processed = {}
 canonical_book_names_by_id = {} # Ключ: BookId (int), Значение: Каноническое название книги (str)
@@ -31,15 +35,17 @@ canonical_book_ids_by_name = {} # Ключ: Каноническое назва�
 BOOK_MAPPING = {} # Ключ: Пользовательский ввод (str, нижний регистр), Значение: Каноническое название книги (str)
 
 # Для разделения на Ветхий и Новый Завет
-OLD_TESTAMENT_IDS = set(range(1, 40)) # Бытие (1) до Малахия (39)
-NEW_TESTAMENT_IDS = set(range(40, 67)) # Матфей (40) до Откровение (66)
+OLD_TESTAMENT_IDS = set(range(1, 40))
+NEW_TESTAMENT_IDS = set(range(40, 67))
 
 
-# --- Функция для загрузки и обработки book_aliases.json ---
+# --- Функции загрузки данных ---
+
 async def load_book_aliases():
+    """Загружает алиасы книг из book_aliases.json и заполняет глобальные словари."""
     global canonical_book_names_by_id, canonical_book_ids_by_name, BOOK_MAPPING
+    file_path = os.path.join(os.path.dirname(__file__), BOOK_ALIASES_PATH)
     try:
-        file_path = os.path.join(os.path.dirname(__file__), BOOK_ALIASES_PATH)
         with open(file_path, 'r', encoding='utf-8') as f:
             aliases_raw = json.load(f)
 
@@ -49,7 +55,8 @@ async def load_book_aliases():
 
             BOOK_MAPPING[book_name_canonical.lower()] = book_name_canonical
 
-        # Вручную добавляем дополнительные распространенные сокращения
+        # Вручную добавляем дополнительные распространенные сокращения,
+        # которые мапятся на канонические имена из book_aliases.json
         BOOK_MAPPING.update({
             "быт": "Бытие", "книга бытия": "Бытие", "книга быт": "Бытие",
             "исх": "Исход", "книга исход": "Исход", "книга исх": "Исход",
@@ -118,13 +125,11 @@ async def load_book_aliases():
     except Exception as e:
         print(f"Произошла непредвиденная ошибка при загрузке алиасов книг: {e}")
 
-
-# --- Функция для загрузки и обработки Библии ---
 async def load_bible():
+    """Загружает данные Библии из bible.json и преобразует их в удобный для поиска формат."""
     global bible_data_processed
-    raw_bible_data = {}
+    file_path = os.path.join(os.path.dirname(__file__), BIBLE_JSON_PATH)
     try:
-        file_path = os.path.join(os.path.dirname(__file__), BIBLE_JSON_PATH)
         with open(file_path, 'r', encoding='utf-8') as f:
             raw_bible_data = json.load(f)
 
@@ -156,7 +161,6 @@ async def load_bible():
     except Exception as e:
         print(f"Произошла непредвиденная ошибка при загрузке Библии: {e}")
 
-# --- Функция, которая будет вызвана после инициализации Application ---
 async def post_init(application: Application):
     """Вызывается после инициализации Application, чтобы загрузить данные."""
     print("Выполняется post_init: Загрузка алиасов книг...")
@@ -164,32 +168,39 @@ async def post_init(application: Application):
     print("Выполняется post_init: Загрузка данных Библии...")
     await load_bible()
 
+# --- Обработчики команд и сообщений ---
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает команду /start."""
-    await update.message.reply_text("Привет! Я бот ✝️.\nИспользуйте команду /bible [Книга] [Глава]:[Стих] для чтения Библии или /bible_menu для интерактивной навигации.")
+    if update.message: # Проверяем, что update.message не None
+        await update.message.reply_text("Привет! Я бот ✝️.\nИспользуйте команду /bible [Книга] [Глава]:[Стих] для чтения Библии или /bible_menu для интерактивной навигации.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает все текстовые сообщения, которые не являются командами."""
-    user_message = update.message.text
-    user_id = update.message.from_user.id
-    username = update.message.from_user.username
-    first_name = update.message.from_user.first_name
+    if update.message: # Проверяем, что update.message не None
+        user_message = update.message.text
+        user = update.message.from_user # Получаем объект User
+        user_id = user.id if user else None
+        username = user.username if user else None
+        first_name = user.first_name if user else None
 
-    print(f"Получено сообщение от {first_name} (@{username} / ID: {user_id}): {user_message}")
+        print(f"Получено сообщение от {first_name} (@{username} / ID: {user_id}): {user_message}")
 
-    await update.message.reply_text(f"Я получил ваше сообщение: '{user_message}'. Для чтения Библии используйте /bible [Книга] [Глава]:[Стих] или /bible_menu для интерактивной навигации.")
+        await update.message.reply_text(f"Я получил ваше сообщение: '{user_message}'. Для чтения Библии используйте /bible [Книга] [Глава]:[Стих] или /bible_menu для интерактивной навигации.")
 
 async def read_bible_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает команду /bible для чтения стихов (как раньше)."""
+    """Обрабатывает команду /bible для чтения стихов."""
     if not context.args:
-        await update.message.reply_text("Пожалуйста, укажите книгу, главу и стих (например, `/bible Иоанн 3:16` или `/bible Бытие 1`).")
+        if update.message:
+            await update.message.reply_text("Пожалуйста, укажите книгу, главу и стих (например, `/bible Иоанн 3:16` или `/bible Бытие 1`).")
         return
 
     query_str = " ".join(context.args).strip()
     match = re.match(r"(.+?)\s+(\d+)(?::(\d+)(?:-(\d+))?)?$", query_str, re.IGNORECASE)
 
     if not match:
-        await update.message.reply_text("Неверный формат запроса. Используйте: `/bible Книга Глава:Стих` или `/bible Книга Глава` (например, `/bible Иоанн 3:16`).")
+        if update.message:
+            await update.message.reply_text("Неверный формат запроса. Используйте: `/bible Книга Глава:Стих` или `/bible Книга Глава` (например, `/bible Иоанн 3:16`).")
         return
 
     book_raw, chapter_str, verse_start_str, verse_end_str = match.groups()
@@ -218,9 +229,8 @@ async def read_bible_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             for v_num_str in sorted(chapter_data.keys(), key=int):
                 verses.append(f"{v_num_str}. {chapter_data[v_num_str]}")
             
-            if verses:
-                response_text = f"*{book_name_canonical} {chapter_num_str} глава:*\n" + "\n".join(verses)
-            else:
+            response_text = f"*{book_name_canonical} {chapter_num_str} глава:*\n" + "\n".join(verses)
+            if not verses: # Если вдруг глава пустая
                 response_text = f"В главе {chapter_num_str} книги '{book_name_canonical}' не найдено стихов."
 
         else:
@@ -247,27 +257,35 @@ async def read_bible_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                  else:
                     response_text = f"Стихи в диапазоне {verse_start}{'-'+str(verse_end) if verse_end != verse_start else ''} не найдены в {book_name_canonical} {chapter_num_str} главе."
 
-    await update.message.reply_text(response_text, parse_mode='Markdown')
+    # --- Отправка текста для команды /bible ---
+    # Команда /bible отправляет только одно сообщение, не имеет inline-кнопок для навигации.
+    # Если ответ длиннее лимита, он будет обрезан Telegram'ом.
+    # (Для разрыва на части используется меню, а не прямая команда)
+    if update.message:
+        await update.message.reply_text(response_text, parse_mode='Markdown')
 
-# --- Новая команда для вызова меню Библии ---
+
 async def bible_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вызывает главное меню Библии с выбором Завета."""
     keyboard = [
-        [InlineKeyboardButton("Ветхий Завет", callback_data="show_books:old_testament")], # Изменено callback_data
-        [InlineKeyboardButton("Новый Завет", callback_data="show_books:new_testament")]  # Изменено callback_data
+        [InlineKeyboardButton("Ветхий Завет", callback_data="show_books:old_testament")],
+        [InlineKeyboardButton("Новый Завет", callback_data="show_books:new_testament")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await (update.message or update.callback_query.message).reply_text("Выберите раздел Библии:", reply_markup=reply_markup)
+    # Определяем, откуда пришел запрос: от сообщения или от CallbackQuery
+    if update.message:
+        await update.message.reply_text("Выберите раздел Библии:", reply_markup=reply_markup)
+    elif update.callback_query:
+        await update.callback_query.message.edit_text("Выберите раздел Библии:", reply_markup=reply_markup)
 
 
-# --- Обработчик нажатий на Inline кнопки ---
 async def handle_button_press(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает нажатия на Inline кнопки."""
     query = update.callback_query
     await query.answer() # Обязательно ответить на CallbackQuery, чтобы убрать "часики"
 
     data = query.data
-    chat_id = query.message.chat_id
-    message_id = query.message.message_id
-
+    
     # Вспомогательная функция для отображения списка книг
     async def display_books(category_type):
         book_buttons = []
@@ -282,7 +300,6 @@ async def handle_button_press(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         current_row = []
-        # Сортируем книги по BookId
         sorted_book_ids = sorted(book_ids_to_show)
         
         for book_id in sorted_book_ids:
@@ -292,17 +309,16 @@ async def handle_button_press(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if len(current_row) == 2: # По 2 кнопки в ряд для книг
                     book_buttons.append(current_row)
                     current_row = []
-        if current_row: # Добавляем оставшиеся кнопки, если есть
+        if current_row:
             book_buttons.append(current_row)
         
-        # Добавляем кнопку "Назад" к главному меню
         book_buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_main_menu")])
 
         reply_markup = InlineKeyboardMarkup(book_buttons)
         await query.edit_message_text(f"Выберите книгу из {title}:", reply_markup=reply_markup)
 
 
-    if data.startswith("show_books:"): # Теперь обрабатываем show_books
+    if data.startswith("show_books:"):
         category = data.split(":")[1]
         await display_books(category)
 
@@ -320,16 +336,14 @@ async def handle_button_press(update: Update, context: ContextTypes.DEFAULT_TYPE
         current_row = []
         for chapter_id_str in sorted(chapters.keys(), key=int):
             current_row.append(InlineKeyboardButton(chapter_id_str, callback_data=f"chapter:{book_id}:{chapter_id_str}"))
-            if len(current_row) == 5: # По 5 кнопок в ряд для глав
+            if len(current_row) == 5:
                 chapter_buttons.append(current_row)
                 current_row = []
-        if current_row: # Добавляем оставшиеся кнопки
+        if current_row:
             chapter_buttons.append(current_row)
         
-        # Добавляем кнопку "Назад к книгам"
-        # Передаем категорию, чтобы display_books знал, какой список книг показывать
         category_for_back = 'old_testament' if book_id in OLD_TESTAMENT_IDS else 'new_testament'
-        chapter_buttons.append([InlineKeyboardButton("⬅️ Назад к книгам", callback_data=f"show_books:{category_for_back}")]) # Изменено здесь
+        chapter_buttons.append([InlineKeyboardButton("⬅️ Назад к книгам", callback_data=f"show_books:{category_for_back}")])
 
         reply_markup = InlineKeyboardMarkup(chapter_buttons)
         await query.edit_message_text(f"Выберите главу для книги *{book_name_canonical}*:", reply_markup=reply_markup, parse_mode='Markdown')
@@ -355,22 +369,43 @@ async def handle_button_press(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             response_text = f"В главе {chapter_id_str} книги '{book_name_canonical}' не найдено стихов."
         
-        # Добавляем кнопку "Назад к книгам"
-        # Передаем категорию, чтобы display_books знал, какой список книг показывать
-        category_for_back = 'old_testament' if book_id in OLD_TESTAMENT_IDS else 'new_testament'
-        keyboard = [[InlineKeyboardButton("⬅️ Назад к главам", callback_data=f"book:{book_id}")]] # Возвращаемся к списку глав этой книги
+        # --- Отправка текста с учетом лимита сообщений ---
+        # Кнопка "Назад к главам" прикрепляется к последнему сообщению
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к главам", callback_data=f"book:{book_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Telegram имеет ограничение на длину сообщения (4096 символов).
-        # Если глава очень длинная, нужно разбить её на несколько сообщений.
-        if len(response_text) > 4000:
-            await query.edit_message_text(f"Глава *{book_name_canonical} {chapter_id_str}* слишком длинная для одного сообщения. Отправляю только начало.", parse_mode='Markdown')
-            await query.message.reply_text(response_text[:4000] + "...", parse_mode='Markdown', reply_markup=reply_markup)
-        else:
-            await query.edit_message_text(response_text, parse_mode='Markdown', reply_markup=reply_markup)
-    
+        # Разделяем текст на части, если он превышает лимит Telegram
+        messages_to_send = []
+        current_message_start = 0
+        
+        full_text_content_for_split = response_text
+
+        while current_message_start < len(full_text_content_for_split):
+            chunk = full_text_content_for_split[current_message_start : current_message_start + TELEGRAM_MESSAGE_LIMIT]
+            messages_to_send.append(chunk)
+            current_message_start += TELEGRAM_MESSAGE_LIMIT
+        
+        # Отправляем все части сообщения
+        for i, message_chunk in enumerate(messages_to_send):
+            # Если это последняя часть, прикрепляем кнопки
+            if i == len(messages_to_send) - 1:
+                await query.message.reply_text(message_chunk, parse_mode='Markdown', reply_markup=reply_markup)
+            else:
+                await query.message.reply_text(message_chunk, parse_mode='Markdown')
+                await asyncio.sleep(0.5) # Небольшая задержка между частями
+        
+        # Если messages_to_send пуст (например, response_text была пустой строкой),
+        # отправляем сообщение о пустой главе
+        if not messages_to_send:
+            await query.message.reply_text("Глава не содержит текста.", parse_mode='Markdown')
+
+        # Удаляем предыдущее сообщение с кнопками глав
+        try:
+            await query.delete_message()
+        except Exception:
+            pass # Если сообщение уже удалено или не существует
+
     elif data == "back_to_main_menu":
-        # Если нажали "Назад" из меню книг, возвращаемся к выбору Завета
         keyboard = [
             [InlineKeyboardButton("Ветхий Завет", callback_data="show_books:old_testament")],
             [InlineKeyboardButton("Новый Завет", callback_data="show_books:new_testament")]
@@ -378,26 +413,23 @@ async def handle_button_press(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("Выберите раздел Библии:", reply_markup=reply_markup)
     
-    # OLD: elif data.startswith("back_to_category:"):
-    #    category = data.split(":")[1]
-    #    await handle_button_press(update.callback_query, context) # Повторно вызываем обработчик для категории
-
-    # OLD: elif data.startswith("back_to_books:"):
-    #    category = data.split(":")[1]
-    #    await handle_button_press(update.callback_query, context)
-
 
 if __name__ == '__main__':
+    # Создаем экземпляр Application
     app = Application.builder().token(TOKEN).build()
 
+    # Регистрируем функцию post_init для загрузки Библии
     app.post_init = post_init
 
+    # Добавляем обработчики команд
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("bible", read_bible_command))
-    app.add_handler(CommandHandler("bible_menu", bible_menu))
+    app.add_handler(CommandHandler("bible_menu", bible_menu)) # Регистрируем глобальную функцию bible_menu
 
-    app.add_handler(CallbackQueryHandler(handle_button_press))
+    # Добавляем обработчик для всех CallbackQuery (нажатий на inline-кнопки)
+    app.add_handler(CallbackQueryHandler(handle_button_press)) # Регистрируем глобальную функцию handle_button_press
 
+    # Добавляем обработчик для всех текстовых сообщений, которые НЕ являются командами
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("Bot Started...")
